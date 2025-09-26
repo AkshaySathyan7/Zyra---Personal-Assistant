@@ -8,64 +8,147 @@ import webbrowser
 import requests
 import random
 import time
+import threading
+import tkinter as tk
+from tkinter import Canvas, Scrollbar, Frame, Label, Entry, Button, BOTH, LEFT, RIGHT, Y, END, StringVar, OptionMenu, TOP, BOTTOM
 
-# ----------------------
-# SETTINGS
-# ----------------------
-BOT_NAME = "zyra"
-WEATHER_API_KEY = "YOUR_OPENWEATHERMAP_API_KEY"  # Replace with your key
-NEWS_API_KEY = "YOUR_NEWSAPI_KEY"  # Replace with your key
+# ---------------------- SETTINGS ----------------------
+BOT_NAME = "Zyra"
+WEATHER_API_KEY = "YOUR_OPENWEATHERMAP_API_KEY"
+NEWS_API_KEY = "YOUR_NEWSAPI_KEY"
 
-# ----------------------
-# INITIALIZE
-# ----------------------
+# ---------------------- INITIALIZE ----------------------
 engine = pyttsx3.init()
 voices = engine.getProperty('voices')
-engine.setProperty('voice', voices[1].id)  # female voice
+engine.setProperty('voice', voices[1].id)
 recognizer = sr.Recognizer()
+selected_mic_index = None
+input_mode = "both"  # set by selection screen
 
-# ----------------------
-# FUNCTIONS
-# ----------------------
+# ---------------------- GUI SETUP ----------------------
+root = tk.Tk()
+root.title("Zyra Voice Assistant")
+root.geometry("500x650")
+root.resizable(False, False)
+
+canvas = Canvas(root, bg="#F5F5F5")
+scrollbar = Scrollbar(root, command=canvas.yview)
+scrollable_frame = Frame(canvas, bg="#F5F5F5")
+scrollable_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+canvas.configure(yscrollcommand=scrollbar.set)
+canvas.pack(side=TOP, fill=BOTH, expand=True)
+scrollbar.pack(side=RIGHT, fill=Y)
+
+# Entry frame
+entry_frame = Frame(root, bg="#DDDDDD")
+entry_frame.pack(side=BOTTOM, fill="x", padx=5, pady=5)
+user_input = Entry(entry_frame, font=("Arial", 14))
+user_input.pack(side=LEFT, fill="x", expand=True, padx=5)
+send_btn = Button(entry_frame, text="Send", command=lambda: threading.Thread(target=send_message).start())
+send_btn.pack(side=LEFT, padx=5)
+mic_btn = Button(entry_frame, text="🎤 Speak", command=lambda: threading.Thread(target=speak_message).start())
+mic_btn.pack(side=LEFT, padx=5)
+
+# ---------------------- CHAT & VOICE ----------------------
+def add_message(sender, text):
+    bubble_color = "#DCF8C6" if sender == BOT_NAME else "#ECECEC"
+    anchor_side = "w" if sender == BOT_NAME else "e"
+    timestamp = datetime.datetime.now().strftime("%H:%M")
+
+    bubble = Frame(scrollable_frame, bg=scrollable_frame["bg"], padx=10, pady=5)
+    bubble.pack(anchor=anchor_side, pady=5, padx=10, fill="x")
+
+    label = Label(
+        bubble,
+        text=f"{text}\n{timestamp}",
+        bg=bubble_color,
+        wraplength=350,
+        justify="left",
+        font=("Arial", 12),
+        bd=5,
+        relief="ridge",
+        padx=8,
+        pady=4,
+        cursor="hand2"
+    )
+    label.pack(anchor=anchor_side, fill="none")
+
+    # Make clickable links open in browser
+    def open_url(event):
+        if text.startswith("http"):
+            webbrowser.open(text)
+    label.bind("<Button-1>", open_url)
+
+    canvas.update_idletasks()
+    canvas.yview_moveto(1)
+
 def talk(text):
-    """Speak and print simultaneously"""
-    engine.say(text)
-    engine.runAndWait()
-    time.sleep(0.25)  # tiny pause to prevent skipping
-    print(f"{BOT_NAME.capitalize()}: {text}")
+    if input_mode in ["speech", "both"]:
+        engine.say(text)
+        engine.runAndWait()
+    add_message(BOT_NAME, text)
 
-def listen():
-    """Listen to speech input and return text"""
-    mic_list = sr.Microphone.list_microphone_names()
-    print("Available microphones:", mic_list)  # for debugging
-    with sr.Microphone() as source:
-        talk("Listening...")
-        recognizer.adjust_for_ambient_noise(source, duration=1)
-        try:
-            audio = recognizer.listen(source, timeout=None, phrase_time_limit=8)
-            command = recognizer.recognize_google(audio).lower().strip()
-            print("You (speech):", command)
-            return command
-        except sr.UnknownValueError:
-            talk("Sorry, I couldn't understand you.")
-            return None
-        except sr.RequestError:
-            talk("Speech recognition service is unavailable.")
-            return None
-
+# ---------------------- INPUT ----------------------
 def get_input_text():
-    """Get text input from user"""
-    return input("You (text): ").lower().strip()
+    return user_input.get().strip()
 
 def get_input_speech():
-    """Get speech input from user until recognized"""
-    while True:
-        command = listen()
-        if command:
+    global selected_mic_index
+    if selected_mic_index is None:
+        talk("Please select a microphone first!")
+        return None
+    try:
+        with sr.Microphone(device_index=selected_mic_index) as source:
+            recognizer.adjust_for_ambient_noise(source, duration=0.5)
+            add_message(BOT_NAME, "Listening...")
+            audio = recognizer.listen(source, timeout=None, phrase_time_limit=8)
+            command = recognizer.recognize_google(audio).strip()
+            add_message("You", command)
             return command
-        else:
-            talk("Try speaking again...")
+    except:
+        talk("Sorry, I couldn't understand you.")
+        return None
 
+def send_message():
+    if input_mode in ["text", "both"]:
+        command = get_input_text()
+        if not command: return
+        user_input.delete(0, END)
+        add_message("You", command)
+        threading.Thread(target=zyra_response, args=(command,)).start()
+
+def speak_message():
+    if input_mode in ["speech", "both"]:
+        threading.Thread(target=lambda: zyra_response(get_input_speech())).start()
+
+# ---------------------- MODE & MIC ----------------------
+def set_mode(mode):
+    global input_mode
+    input_mode = mode
+    mode_frame.destroy()
+    if mode in ["speech", "both"]:
+        show_mic_selection()
+    talk(f"{mode.capitalize()} mode selected. You can start chatting now.")
+
+def show_mic_selection():
+    global mic_frame, selected_mic_index
+    mic_frame = tk.Frame(root, bg="#DDDDDD")
+    mic_frame.place(relx=0.5, rely=0.5, anchor="center")
+    tk.Label(mic_frame, text="Select Microphone:", font=("Arial", 14), bg="#DDDDDD").pack(pady=5)
+    mic_list = sr.Microphone.list_microphone_names()
+    mic_var = StringVar(root)
+    mic_var.set(mic_list[0])
+    dropdown = OptionMenu(mic_frame, mic_var, *mic_list)
+    dropdown.pack(pady=5)
+    def select_mic():
+        nonlocal mic_var
+        selected_mic_index = mic_list.index(mic_var.get())
+        mic_frame.destroy()
+        talk(f"Microphone '{mic_var.get()}' selected. You can start speaking now!")
+    tk.Button(mic_frame, text="Select", command=select_mic).pack(pady=5)
+
+# ---------------------- AUX FUNCTIONS ----------------------
 def get_weather(city):
     try:
         url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={WEATHER_API_KEY}&units=metric"
@@ -77,7 +160,7 @@ def get_weather(city):
         else:
             talk(f"Couldn't fetch weather for {city}.")
     except:
-        talk("Weather service is currently unavailable.")
+        talk("Weather service is unavailable.")
 
 def get_news():
     try:
@@ -91,217 +174,85 @@ def get_news():
         else:
             talk("No news found.")
     except:
-        talk("News service is currently unavailable.")
+        talk("News service is unavailable.")
 
-def wish_me():
-    hour = int(datetime.datetime.now().hour)
-    if 0 <= hour < 12:
-        talk("Good morning! I am Zyra, your personal assistant.")
-    elif 12 <= hour < 18:
-        talk("Good afternoon! I am Zyra, your personal assistant.")
-    else:
-        talk("Good evening! I am Zyra, your personal assistant.")
-    talk("Select your input mode: 1 for Text, 2 for Speech.")
+# ---------------------- ZYRA RESPONSE ----------------------
+def zyra_response(command):
+    if not command: return
+    cmd = command.lower()
 
-# ---------------------- MAIN LOGIC ----------------------
-def run_zyra(get_input_func):
-    command = get_input_func()
-    if not command:
-        return True
-
-    command_lower = command.lower()
-
-    # --------- CASUAL CONVERSATION ----------
     greetings = ["hi", "hello", "hey", "good morning", "good afternoon", "good evening"]
-    if any(word in command_lower for word in greetings):
+    if any(word in cmd for word in greetings):
         talk("Hello! How are you today?")
-        return True
-
-    if "how are you" in command_lower or "how's it going" in command_lower:
-        talk("I am just a bunch of code, but I'm doing great! How about you?")
-        return True
-
-    if "thank" in command_lower:
+        return
+    if "how are you" in cmd:
+        talk("I am a program, but I am doing great! How about you?")
+        return
+    if "thank" in cmd:
         talk("You're welcome!")
-        return True
-
-    if "what's up" in command_lower or "whats up" in command_lower:
-        talk("Not much, just here to assist you! What about you?")
-        return True
-
-    if "i love you" in command_lower:
-        talk("Aww, I love you too! But I am still a program 😄")
-        return True
-
-    # --------- FUN / ENTERTAINMENT ----------
-    if "tell me something" in command_lower or "tell me a fact" in command_lower:
+        return
+    if "joke" in cmd:
+        talk(pyjokes.get_joke())
+        return
+    if "flip a coin" in cmd:
+        talk("Heads!" if random.randint(0,1)==0 else "Tails!")
+        return
+    if "roll a dice" in cmd or "random number" in cmd:
+        num = random.randint(1,6) if "dice" in cmd else random.randint(1,100)
+        talk(f"Your random number is {num}")
+        return
+    if "tell me something" in cmd or "tell me a fact" in cmd:
         facts = [
-            "Did you know honey never spoils?",
-            "Octopuses have three hearts!",
-            "Bananas are berries, but strawberries are not!",
+            "Honey never spoils.",
+            "Octopuses have three hearts.",
+            "Bananas are berries, but strawberries are not.",
             "A day on Venus is longer than a year on Venus."
         ]
         talk(random.choice(facts))
-        return True
+        return
 
-    if "joke" in command_lower:
-        talk(pyjokes.get_joke())
-        return True
-
-    if "flip a coin" in command_lower:
-        talk("Heads!" if random.randint(0,1) == 0 else "Tails!")
-        return True
-
-    if "roll a dice" in command_lower or "random number" in command_lower:
-        num = random.randint(1,6) if "dice" in command_lower else random.randint(1,100)
-        talk(f"Your random number is {num}")
-        return True
-
-    # --------- TIMER ----------
-    if "set a timer for" in command_lower:
-        try:
-            words = command_lower.split()
-            for i, word in enumerate(words):
-                if word.isdigit():
-                    seconds = int(word)
-                    if i+1 < len(words) and "minute" in words[i+1]:
-                        seconds *= 60
-                    talk(f"Timer set for {seconds} seconds!")
-                    time.sleep(seconds)
-                    talk("Time's up!")
-                    return True
-            talk("Please specify the time in seconds or minutes.")
-        except:
-            talk("I couldn't set the timer. Try again.")
-        return True
-
-    # --------- MATH ----------
-    if "add" in command_lower or "plus" in command_lower:
-        nums = [int(s) for s in command_lower.split() if s.isdigit()]
-        if len(nums) >= 2:
-            talk(f"The answer is {sum(nums)}")
-        else:
-            talk("Please provide two numbers to add.")
-        return True
-
-    if "subtract" in command_lower or "minus" in command_lower:
-        nums = [int(s) for s in command_lower.split() if s.isdigit()]
-        if len(nums) >= 2:
-            talk(f"The answer is {nums[0] - nums[1]}")
-        else:
-            talk("Please provide two numbers to subtract.")
-        return True
-
-    if "multiply" in command_lower or "times" in command_lower:
-        nums = [int(s) for s in command_lower.split() if s.isdigit()]
-        if len(nums) >= 2:
-            talk(f"The answer is {nums[0] * nums[1]}")
-        else:
-            talk("Please provide two numbers to multiply.")
-        return True
-
-    if "divide" in command_lower or "divided by" in command_lower:
-        nums = [int(s) for s in command_lower.split() if s.isdigit()]
-        if len(nums) >= 2:
-            if nums[1] == 0:
-                talk("Cannot divide by zero!")
-            else:
-                talk(f"The answer is {nums[0] / nums[1]}")
-        else:
-            talk("Please provide two numbers to divide.")
-        return True
-
-    # --------- STANDARD COMMANDS ----------
-    if "play" in command_lower:
-        song = command_lower.replace("play", "").strip()
-        talk("Playing " + song)
-        pywhatkit.playonyt(song)
-        return True
-
-    elif "time" in command_lower:
-        time_str = datetime.datetime.now().strftime("%I:%M %p")
-        talk("Current time is " + time_str)
-        return True
-
-    elif "date" in command_lower:
-        date_str = datetime.datetime.now().strftime("%A, %B %d, %Y")
-        talk("Today is " + date_str)
-        return True
-
-    elif "who is" in command_lower or "who the heck is" in command_lower:
-        person = command_lower.replace("who is", "").replace("who the heck is", "").strip()
-        try:
-            info = wikipedia.summary(person, sentences=1)
-            talk(info)
-        except wikipedia.exceptions.DisambiguationError:
-            talk(f"Multiple results found for {person}. Please be more specific.")
-        except wikipedia.exceptions.PageError:
-            talk(f"Sorry, I couldn't find information about {person}.")
-        return True
-
-    elif "open" in command_lower:
-        if "youtube" in command_lower:
-            webbrowser.open("https://www.youtube.com")
-            talk("Opening YouTube")
-        elif "google" in command_lower:
-            webbrowser.open("https://www.google.com")
-            talk("Opening Google")
-        else:
-            site = command_lower.replace("open", "").strip()
-            url = "https://" + site
-            webbrowser.open(url)
-            talk(f"Opening {site}")
-        return True
-
-    elif "weather" in command_lower:
-        city = command_lower.replace("weather", "").strip()
-        if city:
-            get_weather(city)
-        else:
-            talk("Please specify the city.")
-        return True
-
-    elif "news" in command_lower:
+    # Commands with buttons
+    if "time" in cmd:
+        talk("Current time is "+datetime.datetime.now().strftime("%I:%M %p"))
+        return
+    if "date" in cmd:
+        talk("Today is "+datetime.datetime.now().strftime("%A, %B %d, %Y"))
+        return
+    if "weather" in cmd:
+        city = cmd.replace("weather", "").strip()
+        if city: get_weather(city)
+        else: talk("Please specify the city.")
+        return
+    if "news" in cmd:
         get_news()
-        return True
-
-    elif "are you single" in command_lower:
-        talk("I am in a relationship with Wi-Fi.")
-        return True
-
-    elif "remind me" in command_lower:
-        reminder = command_lower.replace("remind me", "").strip()
-        talk(f"Reminder set: {reminder}. Don't forget!")
-        return True
-
-    elif command_lower in ["exit", "quit", "bye"]:
+        return
+    if "play" in cmd:
+        song = cmd.replace("play","").strip()
+        talk("Playing "+song)
+        pywhatkit.playonyt(song)
+        return
+    if "open" in cmd:
+        site = cmd.replace("open","").strip()
+        if "youtube" in cmd: site = "https://www.youtube.com"
+        elif "google" in cmd: site = "https://www.google.com"
+        elif not site.startswith("http"): site = "https://" + site
+        webbrowser.open(site)
+        talk(f"Opening {site}")
+        return
+    if cmd in ["exit","quit","bye"]:
         talk("Goodbye! Have a nice day.")
-        return False
+        root.quit()
+        return
 
-    # --------- FALLBACK ----------
     talk("I didn't understand that. Try another command.")
-    return True
 
-# ----------------------
-# MAIN PROGRAM
-# ----------------------
-if __name__ == "__main__":
-    wish_me()
-    while True:
-        mode = input("Enter 1 for Text, 2 for Speech: ").strip()
-        if mode == "1":
-            get_input_func = get_input_text
-            talk("Text mode selected. Let's start!")
-            break
-        elif mode == "2":
-            get_input_func = get_input_speech
-            talk("Speech mode selected. Let's start!")
-            break
-        else:
-            talk("Invalid choice. Enter 1 or 2.")
+# ---------------------- MODE SELECTION ----------------------
+mode_frame = tk.Frame(root, bg="#DDDDDD")
+mode_frame.place(relx=0.5, rely=0.5, anchor="center")
+tk.Label(mode_frame, text="Select Input Mode:", font=("Arial", 16), bg="#DDDDDD").pack(pady=5)
+tk.Button(mode_frame, text="Text Only", width=25, command=lambda: set_mode("text")).pack(pady=5)
+tk.Button(mode_frame, text="Speech Only", width=25, command=lambda: set_mode("speech")).pack(pady=5)
+tk.Button(mode_frame, text="Both (Text + Speech)", width=25, command=lambda: set_mode("both")).pack(pady=5)
 
-    continue_chat = True
-    while continue_chat:
-        continue_chat = run_zyra(get_input_func)
-        if continue_chat:
-            talk("What would you like me to do next?")
+talk("Hello! I am Zyra. Please select your input mode to start chatting.")
+root.mainloop()
